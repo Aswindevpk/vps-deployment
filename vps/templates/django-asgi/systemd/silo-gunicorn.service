@@ -1,0 +1,31 @@
+[Unit]
+Description=Gunicorn ASGI instance for Silo
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+User=deploy
+Group=www-data
+WorkingDirectory=/var/www/silo
+EnvironmentFile=-/var/www/silo/.env
+RuntimeDirectory=
+# Ensure the Unix socket directory is writable by deploy and readable by nginx (www-data)
+UMask=007
+
+ExecStart=/var/www/silo/.venv/bin/gunicorn \
+          --access-logfile - \
+          -k uvicorn.workers.UvicornWorker \
+          --workers 3 \
+          --bind unix:/var/www/silo/silo.sock \
+          config.asgi:application
+
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

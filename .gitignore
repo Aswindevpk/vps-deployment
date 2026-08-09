@@ -1,0 +1,41 @@
+# Environment files
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Docker global-proxy: host-specific site configs (keep templates + .gitkeep)
+docker/global-proxy/conf.d/*.conf
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node (if mixed monorepo tooling appears later)
+node_modules/
+
+# Temporary / editor / OS
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs and local artifacts
+*.log
+*.sock
+
+# Secrets / certificates (never commit)
+*.pem
+*.key
+id_rsa
+id_ed25519

@@ -1,0 +1,19 @@
+services:
+  global-nginx:
+    image: nginx:alpine
+    container_name: global-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./conf.d:/etc/nginx/conf.d
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    networks:
+      - gateway
+
+networks:
+  gateway:
+    external: true
+    name: gateway
