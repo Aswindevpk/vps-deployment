@@ -1,8 +1,9 @@
 # Blueprint: Django ASGI + Celery + Postgres + Redis
 # Copy into your application repo and adjust image/env names.
 #
-# Requires the external Docker network `gateway` (created once on the VPS):
-#   docker network create gateway
+# Edge proxy: host Nginx on the VPS (not a Docker nginx container).
+# Web publishes to localhost only — host Nginx reverse-proxies to that port.
+# See docker/templates/django-asgi/nginx/ for /etc/nginx/conf.d/ configs.
 
 name: silo
 
@@ -19,15 +20,15 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-app}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    expose:
-      - "8000"
+    ports:
+      # CHANGE: host port — must match /etc/nginx/conf.d/ proxy_pass (e.g. 127.0.0.1:8000)
+      - "127.0.0.1:${WEB_HOST_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     networks:
-      - gateway
       - silo-internal
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/healthz/"]
@@ -108,9 +109,6 @@ volumes:
   redis_data:
 
 networks:
-  gateway:
-    external: true
-    name: gateway
   silo-internal:
     driver: bridge
     name: silo-internal

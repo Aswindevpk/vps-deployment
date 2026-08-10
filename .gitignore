@@ -4,9 +4,6 @@
 !.env.example
 !**/.env.example
 
-# Docker global-proxy: host-specific site configs (keep templates + .gitkeep)
-docker/global-proxy/conf.d/*.conf
-
 # Python / uv
 .venv/
 __pycache__/

@@ -1,61 +1,59 @@
 # vps-deployment
 
-Single source of truth for VPS infrastructure. This monorepo supports **two** deployment paradigms:
+Single source of truth for VPS infrastructure. Two deployment paradigms:
 
 | Path | Paradigm | When to use |
 |------|----------|-------------|
-| [`docker/`](docker/README.md) | Containerized Nginx edge proxy + app Compose stacks on a shared `gateway` network | Multiple isolated apps, portable deploys, GHCR images |
-| [`vps/`](vps/README.md) | Native Nginx + systemd + Gunicorn/UvicornWorker + Postgres + Redis + `uv` | Maximum performance, Unix sockets, fewer moving parts on a single VPS |
+| [`docker/`](docker/README.md) | Docker app stacks + **host Nginx** → `127.0.0.1` published ports | Containerized apps, GHCR images, Postgres/Redis in Docker |
+| [`vps/`](vps/README.md) | **Host Nginx** → Unix socket + systemd Gunicorn + host Postgres/Redis | No Docker for the app runtime; maximum socket performance |
+
+Both use **system Nginx** on 80/443 (`/etc/nginx/conf.d/`). Neither uses a Docker nginx container by default.
 
 ```text
 vps-deployment/
-├── README.md                 # This file — overview and conventions
-├── docker/                   # Containerized architecture (see docker/README.md)
-│   ├── global-proxy/         # Shared edge Nginx (80/443 → apps)
-│   └── templates/django-asgi/# App blueprint (Compose + Dockerfile + CI)
-└── vps/                      # Native Linux architecture (see vps/README.md)
+├── README.md
+├── docker/                   # Compose blueprints + host Nginx templates for Docker apps
+│   └── templates/django-asgi/
+└── vps/                      # Bootstrap script + native app templates
     ├── setup-vps-environment.sh
-    └── templates/django-asgi/# systemd + Nginx socket + deploy/teardown
+    └── templates/django-asgi/
 ```
 
 ---
 
 ## Choose a paradigm
 
-- **Docker**: One `global-nginx` container owns ports 80/443. Apps never publish public ports; they join the external Docker network `gateway` and are reached by `container_name`.
-- **VPS (native)**: Host Nginx terminates TLS and proxies to a Unix domain socket (`/var/www/<app>/<app>.sock`) served by Gunicorn with `uvicorn.workers.UvicornWorker`. Postgres, Redis, and Certbot run as system services.
+- **Docker apps**: Compose runs web/celery/db/redis. Web publishes `127.0.0.1:8000:8000`. Host Nginx proxies to that port.
+- **Native VPS**: Gunicorn on a Unix socket. Host Nginx proxies to `unix:/var/www/silo/silo.sock`. Postgres/Redis on the host.
 
-Do **not** run both edge proxies on the same VPS binding 80/443 at once. Pick one edge for a given host.
+Use **one** Nginx edge on the VPS (system Nginx). Do not run `global-nginx` in Docker alongside it.
 
 ---
 
 ## Getting started
 
-Initial VPS setup differs by paradigm — follow the README for the path you chose:
-
 | Paradigm | Start here |
 |----------|------------|
-| Docker | [`docker/README.md`](docker/README.md) — deploy user, Docker Engine, `gateway` network, global proxy |
-| VPS (native) | [`vps/README.md`](vps/README.md) — deploy user, host packages via `setup-vps-environment.sh` |
+| Docker apps | [`docker/README.md`](docker/README.md) — Docker Engine + `vps/setup-vps-environment.sh` + Compose |
+| Native VPS | [`vps/README.md`](vps/README.md) — `setup-vps-environment.sh` + systemd |
 
 ---
 
 ## Repository conventions
 
-- **Secrets**: Never commit `.env` or live TLS private keys. Use `.env.example` as documentation only.
-- **Host-specific Nginx sites**: Live `*.conf` under `docker/global-proxy/conf.d/` are gitignored; commit templates only.
-- **App names**: VPS examples use `silo` as the sample project name — rename paths, unit files, and sockets when copying the blueprint.
+- **Secrets**: Never commit `.env` or TLS private keys.
+- **Nginx sites**: `/etc/nginx/conf.d/` on the VPS host (templates in each `templates/django-asgi/nginx/`).
+- **App names**: Examples use **silo** / `silo_web_prod` / port **8000**.
 
 ---
 
 ## Quick reference
 
-| Task | Docker | VPS (native) |
-|------|--------|--------------|
-| Full setup guide | [`docker/README.md`](docker/README.md) | [`vps/README.md`](vps/README.md) |
-| Bootstrap host packages | Docker install + `gateway` network | `vps/setup-vps-environment.sh` |
-| Edge proxy | `docker/global-proxy` | System Nginx site in `sites-available` |
-| App process | Compose (`web` / Celery) | `systemd` unit (`silo-gunicorn.service`) |
-| Upstream | `http://container:port` on `gateway` | `unix:/var/www/silo/silo.sock` |
-| Reload proxy | `./scripts/reload-nginx.sh` | `sudo nginx -t && sudo systemctl reload nginx` |
-| Remove app | `docker compose down` + delete conf | `teardown.sh` |
+| Task | Docker apps | Native VPS |
+|------|-------------|------------|
+| Full guide | [`docker/README.md`](docker/README.md) | [`vps/README.md`](vps/README.md) |
+| Bootstrap host | `vps/setup-vps-environment.sh` + Docker install | `vps/setup-vps-environment.sh` |
+| Edge proxy | `/etc/nginx/conf.d/` | `/etc/nginx/conf.d/` |
+| App runtime | Docker Compose | systemd + Gunicorn |
+| Nginx upstream | `http://127.0.0.1:8000` | `unix:/var/www/silo/silo.sock` |
+| Reload Nginx | `sudo nginx -t && sudo systemctl reload nginx` | same |

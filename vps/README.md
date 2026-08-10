@@ -46,7 +46,6 @@ Run on a fresh VPS before the native stack. **Do not install Docker** on this pa
 
 ```bash
 apt update && apt upgrade -y
-apt install -y curl ca-certificates gnupg ufw git
 ```
 
 ### 1.2 Create the `deploy` user
@@ -65,7 +64,7 @@ chmod 440 /etc/sudoers.d/deploy
 
 ### 1.3 Copy root SSH keys to `deploy` and lock permissions
 
-As root:
+As root, copy the existing root keys to the `deploy` user and set permissions:
 
 ```bash
 mkdir -p /home/deploy/.ssh
@@ -75,35 +74,113 @@ chmod 700 /home/deploy/.ssh
 chmod 600 /home/deploy/.ssh/authorized_keys
 ```
 
+**Add your local SSH key**
+
+If you don't already have an SSH key on your local machine, create a new one:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/contabo-server -C "contabo-server"
+```
+
+Copy the public key output from your local machine:
+
+```bash
+cat ~/.ssh/contabo-server.pub
+```
+
+Back on the server, open the `authorized_keys` file and paste the copied key:
+
+```bash
+vim /home/deploy/.ssh/authorized_keys
+```
+
 Verify you can SSH as `deploy` **before** disabling root login.
+
 
 ### 1.4 Harden SSH (`/etc/ssh/sshd_config`)
 
-Run as **root** (SSH in as `root`, or `sudo -i` from `deploy` after passwordless sudo is configured). Editing `/etc/ssh/sshd_config` requires root; `sshd` is not on a normal user's `PATH` on Debian.
+This guide walks through locking down SSH access on a Linux server (Debian/Ubuntu) by editing `/etc/ssh/sshd_config` using the `vim` text editor.
 
+---
+
+#### 1. Overview of Changes
+
+| Directive | Setting | Purpose |
+| :--- | :--- | :--- |
+| `PasswordAuthentication` | `no` | Blocks brute-force password attacks; forces SSH key logins. |
+| `PermitRootLogin` | `no` | Prevents direct SSH logins as `root`; requires logging in as a standard user first. |
+| `PubkeyAuthentication` | `yes` | Explicitly enables cryptographic SSH key pair logins. |
+
+---
+
+#### 2. Complete Step-by-Step Procedure
+
+**Step 1: Open the configuration file in Vim**
 ```bash
-sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-/usr/sbin/sshd -t && systemctl reload ssh
+sudo vim /etc/ssh/sshd_config
 ```
 
-If you are already logged in as `deploy` with passwordless sudo:
+---
+
+**Step 2: Search, edit, save, and exit in Vim**
+
+1. **Disable Password Authentication:**
+* Type `/PasswordAuthentication` and press `Enter`.
+* Press `i` to enter Insert mode.
+* Edit (and uncomment by removing `#` if present) to match:
+```text
+PasswordAuthentication no
+```
+* Press `Esc`.
+
+2. **Disable Root Login:**
+* Type `/PermitRootLogin` and press `Enter`.
+* Press `i` to enter Insert mode.
+* Edit to match:
+```text
+PermitRootLogin no
+```
+* Press `Esc`.
+
+3. **Enable Public Key Authentication:**
+* Type `/PubkeyAuthentication` and press `Enter`.
+* Press `i` to enter Insert mode.
+* Edit to match:
+```text
+PubkeyAuthentication yes
+```
+* Press `Esc`.
+
+4. **Save and Exit:**
+* Type `:wq` and press `Enter`.
+
+---
+
+**Step 3: Test syntax and apply changes**
+
+Run these commands in your shell:
 
 ```bash
-sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sudo sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-sudo /usr/sbin/sshd -t && sudo systemctl reload ssh
+# Test the configuration file for syntax errors (returns nothing if valid)
+sudo /usr/sbin/sshd -t
+
+# Reload the SSH daemon to apply changes
+sudo systemctl reload ssh
 ```
 
-Confirm:
+---
+
+#### 3. Verification & Testing
+
+**Step 1: Verify the file settings**
+
+Run this command to print the updated configuration values:
 
 ```bash
-grep -E '^(PasswordAuthentication|PermitRootLogin|PubkeyAuthentication)' /etc/ssh/sshd_config
+sudo grep -E '^(PasswordAuthentication|PermitRootLogin|PubkeyAuthentication)' /etc/ssh/sshd_config
 ```
 
-Expected:
+**Expected Output:**
 
 ```text
 PasswordAuthentication no
@@ -111,9 +188,24 @@ PermitRootLogin no
 PubkeyAuthentication yes
 ```
 
+**Step 2: Test connection before exiting**
+
+Do **not** close your current terminal window. Open a **new, separate terminal window** and test logging in:
+
+```bash
+ssh -i ~/.ssh/<key_file_name> deploy@<YOUR_SERVER_IP>
+```
+
+If you log in successfully via your SSH key, the lockdown is complete and working safely.
+
 ### 1.5 UFW firewall
 
 As root (or `sudo` as `deploy`):
+
+**install ufw** if not installed
+```bash
+sudo apt install ufw -y
+```
 
 ```bash
 ufw default deny incoming
@@ -221,63 +313,55 @@ ls -l /var/www/silo/silo.sock
 
 ---
 
-## Step 5: Nginx site + TLS
+## Step 5: Nginx (`/etc/nginx/conf.d/`)
 
-### 5A. Temporary HTTP-only site (Certbot webroot)
-
-Create `/etc/nginx/sites-available/silo-api.conf` with HTTP + ACME only (or temporarily comment out the HTTPS `server` block in the template). Example minimal HTTP server:
-
-```nginx
-server {
-    listen 80;
-    listen [::]:80;
-    server_name api.example.com;
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-
-    location / {
-        return 200 'waiting for TLS\n';
-        add_header Content-Type text/plain;
-    }
-}
-```
+First, ensure Nginx is installed:
 
 ```bash
-sudo ln -sf /etc/nginx/sites-available/silo-api.conf /etc/nginx/sites-enabled/silo-api.conf
-# Disable default site if it conflicts:
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl reload nginx
+sudo apt install nginx
 ```
 
-### 5B. Issue certificate
+**Configure Nginx to use `conf.d` exclusively:**
+
+By default, Ubuntu/Debian's Nginx configuration includes `sites-enabled`. To strictly use the `conf.d` directory for our setups, we should disable the `sites-enabled` include.
+
+Open the main Nginx config file:
 
 ```bash
-sudo certbot certonly --webroot -w /var/www/certbot -d api.example.com
+sudo vim /etc/nginx/nginx.conf
 ```
 
-### 5C. Full HTTPS config from the template
+Find the line that includes `sites-enabled` and comment it out by adding a `#` at the beginning:
+
+```text
+# include /etc/nginx/sites-enabled/*;
+```
+
+Save and exit.
+
+**Key Nginx Directories:**
+- `/etc/nginx` - Main configuration directory.
+- `/var/www/html` - Default website directory.
+
+**Testing & Reloading Configuration:**
+
+Before applying changes, test your configuration for syntax errors:
 
 ```bash
-sudo cp /var/www/vps-deployment/vps/templates/django-asgi/nginx/silo-api.conf \
-  /etc/nginx/sites-available/silo-api.conf
-# Edit server_name and certificate paths if your domain differs
-sudo nginx -t && sudo systemctl reload nginx
-curl -I https://api.example.com
+sudo nginx -t 
 ```
 
-Renewal hook (optional):
+If you need to find an issue and the standard test doesn't provide enough detail, print the full configuration to inspect it:
 
 ```bash
-sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null <<'EOF'
-#!/bin/sh
-systemctl reload nginx
-EOF
-sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+sudo nginx -T
 ```
 
----
+To apply changes without downtime (restarting causes downtime), you should safely reload Nginx:
+
+```bash
+sudo systemctl reload nginx
+```
 
 ## Step 6: Day-to-day lifecycle
 
@@ -310,8 +394,11 @@ Set `DELETE_CERTS=1` only if you intend to revoke/remove the Let's Encrypt linea
 
 ```text
 templates/django-asgi/
+├── nginx/
+│   ├── README.md                   # conf.d install guide
+│   ├── silo-api.conf               # HTTPS → Unix socket
+│   └── silo-api-http.conf          # HTTP testing → Unix socket
 ├── systemd/silo-gunicorn.service   # Gunicorn + UvicornWorker → silo.sock
-├── nginx/silo-api.conf             # TLS + /ws/ + proxy to Unix socket
 ├── deploy.sh                       # git pull · uv sync · migrate · restart
 ├── github-deploy.yml               # SSH deploy workflow for the app repo
 └── teardown.sh                     # Full app removal
@@ -326,3 +413,4 @@ templates/django-asgi/
 - Keep `.env` mode `600` and owned by `deploy`.
 - For multiple apps on one host, duplicate the blueprint with unique `APP_NAME`, socket path, systemd unit, Nginx `server_name`, and Postgres database.
 - Do not run Docker `global-nginx` on 80/443 on the same machine as host Nginx.
+- For Docker apps on the same host, see [`docker/README.md`](docker/README.md) — host Nginx proxies to `127.0.0.1` published ports.
