@@ -50,15 +50,29 @@ apt update && apt upgrade -y
 
 ### 1.2 Create the `deploy` user
 
+Create the new `deploy` user without a password (we will use SSH keys instead):
+
 ```bash
 adduser --disabled-password --gecos "" deploy
+```
+
+Add the `deploy` user to the `sudo` group so it can run administrative commands:
+
+```bash
 usermod -aG sudo deploy
 ```
 
 Allow passwordless sudo for `deploy` (required — `deploy` has no login password):
 
+Create the sudoers rule to grant the permissions:
+
 ```bash
 echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
+```
+
+Lock down the permissions of the new sudoers file to prevent unauthorized edits:
+
+```bash
 chmod 440 /etc/sudoers.d/deploy
 ```
 
@@ -66,11 +80,33 @@ chmod 440 /etc/sudoers.d/deploy
 
 As root, copy the existing root keys to the `deploy` user and set permissions:
 
+Create the SSH directory for the `deploy` user:
+
 ```bash
 mkdir -p /home/deploy/.ssh
+```
+
+Copy the authorized keys from the `root` user to the new `deploy` user so you can log in:
+
+```bash
 cp /root/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+```
+
+Change the ownership of the SSH directory and its contents to the `deploy` user:
+
+```bash
 chown -R deploy:deploy /home/deploy/.ssh
+```
+
+Set strict permissions on the `.ssh` directory (only the owner can read/write/execute):
+
+```bash
 chmod 700 /home/deploy/.ssh
+```
+
+Set strict permissions on the `authorized_keys` file (only the owner can read/write):
+
+```bash
 chmod 600 /home/deploy/.ssh/authorized_keys
 ```
 
@@ -79,13 +115,13 @@ chmod 600 /home/deploy/.ssh/authorized_keys
 If you don't already have an SSH key on your local machine, create a new one:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/contabo-server -C "contabo-server"
+ssh-keygen -t ed25519 -f ~/.ssh/<key_name> -C "<key_name>"
 ```
 
 Copy the public key output from your local machine:
 
 ```bash
-cat ~/.ssh/contabo-server.pub
+cat ~/.ssh/<key_name>.pub
 ```
 
 Back on the server, open the `authorized_keys` file and paste the copied key:
@@ -95,6 +131,10 @@ vim /home/deploy/.ssh/authorized_keys
 ```
 
 Verify you can SSH as `deploy` **before** disabling root login.
+
+```bash
+ssh -i ~/.ssh/<key_file_name> deploy@<YOUR_SERVER_IP>
+```
 
 
 ### 1.4 Harden SSH (`/etc/ssh/sshd_config`)
@@ -208,13 +248,13 @@ sudo apt install ufw -y
 ```
 
 ```bash
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw --force enable
-ufw status verbose
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw --force enable
+sudo ufw status verbose
 ```
 
 ---
@@ -363,7 +403,37 @@ To apply changes without downtime (restarting causes downtime), you should safel
 sudo systemctl reload nginx
 ```
 
-## Step 6: Day-to-day lifecycle
+create new conf file in conf.d for your domain
+
+```bash
+sudo vim /etc/nginx/conf.d/silo-api.aswindev.in.conf
+```
+
+refer nginx template folder for templates
+
+## Step 6: SSL Certificate - HTTPS
+
+Create an SSL certificate for your domain:
+
+```bash
+sudo apt install certbot python3-certbot-nginx -y
+```
+
+Generate the certificate and let Certbot automatically edit your Nginx configuration:
+
+```bash
+sudo certbot --nginx -d dev.aswindev.in
+```
+
+Test automatic renewal:
+
+```bash
+sudo certbot renew --dry-run
+```
+
+---
+
+## Step 7: Day-to-day lifecycle
 
 | Action | Command |
 |--------|---------|
@@ -377,7 +447,7 @@ Wire CI by copying `templates/django-asgi/github-deploy.yml` to the app repo as 
 
 ---
 
-## Step 7: Teardown
+## Step 8: Teardown
 
 Removes systemd unit, Nginx site, app directory, and optionally Postgres DB/role and certificates:
 
