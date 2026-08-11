@@ -282,153 +282,167 @@ sudo -u deploy bash -lc 'uv --version'
 
 ---
 
-## Step 3: Create the application silo
+## Step 3: Deploy Django in VPS
 
-### 3.1 Application directory and code
-
+Go to www dir and create project directory:
 ```bash
-sudo mkdir -p /var/www/silo
-sudo chown deploy:www-data /var/www/silo
-sudo -u deploy git clone <YOUR_APP_REPO_URL> /var/www/silo
-cd /var/www/silo
+cd /var/www   
+sudo mkdir pixel
 ```
 
-Copy deploy helpers from this monorepo (optional but recommended):
-
+If permission errors give whole folder permission to the existing current user:
 ```bash
-cp /var/www/vps-deployment/vps/templates/django-asgi/deploy.sh /var/www/silo/
-cp /var/www/vps-deployment/vps/templates/django-asgi/teardown.sh /tmp/silo-teardown.sh
-chmod +x /var/www/silo/deploy.sh
+sudo chown -R deploy:deploy /var/www/pixel
+sudo chmod -R 755 /var/www/pixel
 ```
 
-### 3.2 PostgreSQL role and database
-
+Git clone:
 ```bash
-sudo -u postgres psql <<'SQL'
-CREATE USER silo WITH PASSWORD 'change-me-strong';
-CREATE DATABASE silo OWNER silo;
-GRANT ALL PRIVILEGES ON DATABASE silo TO silo;
-SQL
+git clone https://github.com/Aswindevpk/pixel-django.git .
 ```
 
-### 3.3 Application `.env`
-
+Install uv (If using uv install all packages for production I defined it prod):
 ```bash
-sudo -u deploy tee /var/www/silo/.env >/dev/null <<'EOF'
-DEBUG=0
-SECRET_KEY=replace-with-long-random-string
-ALLOWED_HOSTS=api.example.com
-CSRF_TRUSTED_ORIGINS=https://api.example.com
-DATABASE_URL=postgres://silo:change-me-strong@127.0.0.1:5432/silo
-REDIS_URL=redis://127.0.0.1:6379/0
-EOF
-chmod 600 /var/www/silo/.env
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.bashrc
 ```
 
-### 3.4 Python environment (uv)
-
+Setup env before run:
 ```bash
-cd /var/www/silo
-sudo -u deploy bash -lc 'export PATH="$HOME/.local/bin:$PATH"; cd /var/www/silo && uv sync --no-dev'
+sudo vim .env
+```
+
+Run uv:
+```bash
+uv sync --frozen --group prod
+uv run python manage.py 
+uv run python manage.py createsuperuser
+uv run python manage.py collectstatic --no-input
+uv run gunicorn config.wsgi:application --bind 0.0.0.0:8000
+```
+Make sure gunicorn runs without errors.
+
+---
+
+## Step 4: Setup gunicorn unix socket
+
+Create a service file:
+```bash
+cd /etc/systemd/system/
+sudo vim pixel-gunicorn.service
+```
+
+Service file content:
+```ini
+[Unit]
+Description=Gunicorn instance for Pixel
+After=network.target
+
+[Service]
+User=deploy
+Group=www-data
+WorkingDirectory=/var/www/pixel
+ExecStart=/var/www/pixel/.venv/bin/gunicorn \
+          --access-logfile - \
+          --workers 3 \
+          --bind unix:/var/www/pixel/pixel.sock \
+          config.wsgi:application
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start gunicorn server:
+```bash
+sudo systemctl daemon-reload 
+sudo systemctl enable pixel-gunicorn 
+sudo systemctl start pixel-gunicorn
+```
+`pixel.sock` file will be created in `/var/www/pixel`.
+
+If any issue run for status and log:
+```bash
+sudo systemctl status pixel-gunicorn
+sudo journalctl -u pixel-gunicorn.service --no-pager | tail -n 20
 ```
 
 ---
 
-## Step 4: systemd unit
-
-```bash
-sudo cp /var/www/vps-deployment/vps/templates/django-asgi/systemd/silo-gunicorn.service \
-  /etc/systemd/system/silo-gunicorn.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now silo-gunicorn.service
-sudo systemctl status silo-gunicorn.service
-```
-
-Confirm the socket exists and is group-readable by `www-data`:
-
-```bash
-ls -l /var/www/silo/silo.sock
-# expect something like: srw-rw---- deploy www-data
-```
-
----
-
-## Step 5: Nginx (`/etc/nginx/conf.d/`)
-
-First, ensure Nginx is installed:
+## Step 5: Nginx configuration
 
 ```bash
 sudo apt install nginx
+cd /etc/nginx/conf.d
 ```
 
-**Configure Nginx to use `conf.d` exclusively:**
-
-By default, Ubuntu/Debian's Nginx configuration includes `sites-enabled`. To strictly use the `conf.d` directory for our setups, we should disable the `sites-enabled` include.
-
-Open the main Nginx config file:
-
+Create and config file in your domain name:
 ```bash
-sudo vim /etc/nginx/nginx.conf
+sudo vim pixel.aswindev.in.conf
 ```
 
-Find the line that includes `sites-enabled` and comment it out by adding a `#` at the beginning:
+File content of configuration:
+```nginx
+server {
+    server_name pixel.aswindev.in;
 
-```text
-# include /etc/nginx/sites-enabled/*;
+    # Global Security Headers
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+    #add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    # Serve Django Static Files directly via Nginx
+    location /static/ {
+            alias /var/www/pixel/static/;
+    }
+    # Serve Django Static Files directly via Nginx
+    location /media/ {
+            alias /var/www/pixel/media/;
+    }
+
+    location / {
+        include proxy_params;
+        proxy_pass http://unix:/var/www/pixel/pixel.sock;
+
+        # CRITICAL FIX: Force HTTP/1.1 to preserve the Host header
+        proxy_http_version 1.1;
+    }
+}
 ```
 
-Save and exit.
-
-**Key Nginx Directories:**
-- `/etc/nginx` - Main configuration directory.
-- `/var/www/html` - Default website directory.
-
-**Testing & Reloading Configuration:**
-
-Before applying changes, test your configuration for syntax errors:
-
+Test if the configuration is correct or not:
 ```bash
-sudo nginx -t 
-```
-
-If you need to find an issue and the standard test doesn't provide enough detail, print the full configuration to inspect it:
-
-```bash
-sudo nginx -T
-```
-
-To apply changes without downtime (restarting causes downtime), you should safely reload Nginx:
-
-```bash
+sudo nginx -t
 sudo systemctl reload nginx
+sudo nginx -T # to get current configuration 
 ```
 
-create new conf file in conf.d for your domain
-
-```bash
-sudo vim /etc/nginx/conf.d/silo-api.aswindev.in.conf
-```
-
-refer nginx template folder for templates
+---
 
 ## Step 6: SSL Certificate - HTTPS
 
-Create an SSL certificate for your domain:
-
+Create ssl certificate for domain:
 ```bash
 sudo apt install certbot python3-certbot-nginx -y
 ```
 
-Generate the certificate and let Certbot automatically edit your Nginx configuration:
-
+Generate certificate and edit nginx configuration:
 ```bash
-sudo certbot --nginx -d dev.aswindev.in
+sudo certbot --nginx -d pixel.aswindev.in
 ```
 
-Test automatic renewal:
-
+Automatic renewal:
 ```bash
 sudo certbot renew --dry-run
+```
+
+Add the A record in the DNS pointing to the vps IP Address.
+
+Restart services to apply everything:
+```bash
+sudo systemctl restart pixel-gunicorn
+sudo systemctl reload nginx
 ```
 
 ---
@@ -437,11 +451,9 @@ sudo certbot renew --dry-run
 
 | Action | Command |
 |--------|---------|
-| Deploy / update code | `cd /var/www/silo && ./deploy.sh` |
-| Restart app | `sudo systemctl restart silo-gunicorn` |
-| App logs | `sudo journalctl -u silo-gunicorn -f` |
+| Restart app | `sudo systemctl restart pixel-gunicorn` |
+| App logs | `sudo journalctl -u pixel-gunicorn -f` |
 | Reload Nginx | `sudo nginx -t && sudo systemctl reload nginx` |
-| Redis CLI | `redis-cli ping` |
 
 Wire CI by copying `templates/django-asgi/github-deploy.yml` to the app repo as `.github/workflows/deploy.yml` and setting `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH`.
 

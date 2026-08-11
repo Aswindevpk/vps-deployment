@@ -1,0 +1,15 @@
+[Unit]
+Description=Gunicorn instance for Pixel
+After=network.target
+
+[Service]
+User=deploy
+Group=www-data
+WorkingDirectory=/var/www/pixel
+ExecStart=/var/www/pixel/.venv/bin/gunicorn \
+          --access-logfile - \
+          --workers 3 \
+          --bind unix:/var/www/pixel/pixel.sock \
+          config.wsgi:application
+[Install]
+WantedBy=multi-user.target
